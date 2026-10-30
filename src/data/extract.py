@@ -147,4 +147,4 @@ def extract_360(events, frames):
                     "keeper": player["keeper"],
                 })
             rel -= 1
-        return frame_rows, player_rows
+    return frame_rows, player_rows
