@@ -1,0 +1,7 @@
+# downloaded and generated data
+/data/
+/predictions/
+
+# Python
+.venv/
+__pycache__/
