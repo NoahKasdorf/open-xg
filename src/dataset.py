@@ -4,6 +4,10 @@ import numpy as np
 import pandas as pd
 
 from src.data.features import FEATURE_SETS
+from src.study360.features import FEATURE_SETS_360, add_360_columns
+
+# the 360 study's sets (src/study360/features.py): each set above plus the 360 columns
+FEATURE_SETS = {**FEATURE_SETS, **FEATURE_SETS_360}
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -34,6 +38,8 @@ def load_dataset(split="train", feature_set="base_ff", penalties=False):
     """Return X, y, meta for "train", "valid" or "test"
 
     feature_set: "geometry", "base" or "base_ff" (see FEATURE_SETS in src/data/features.py).
+    Each also comes with the 360 study's columns added: "geometry_360", "base_360",
+    "base_ff_360" (see FEATURE_SETS_360 in src/study360/features.py).
     Penalties are left out by default: every model, the provider's included, gives them
     about the same xG, so they would only flatter the metrics.
     Keeper columns are NaN for the 0.1% of shots with no keeper in the freeze frame.
@@ -43,6 +49,8 @@ def load_dataset(split="train", feature_set="base_ff", penalties=False):
     df = df[
         df["split"].isin(splits) & (penalties | (df["is_penalty"] == 0))
     ].reset_index(drop=True)
+    if feature_set in FEATURE_SETS_360:  # the 360 study's sets: add the 360 columns
+        df = add_360_columns(df, DATA / "interim")
     return df[FEATURE_SETS[feature_set]], df["is_goal"].astype(int), df[META]
 
 

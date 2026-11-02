@@ -75,8 +75,11 @@ These come in named sets so every result can say exactly what it used (`FEATURE_
 - `geometry` (4): location only, the classic baseline
 - `base` (44): everything except the freeze frame
 - `base_ff` (62): everything
+- `geometry_360` (22), `base_360` (62), `base_ff_360` (80): each of the three plus 18 columns from the shot's own 360 frame, for the 360 study (`FEATURE_SETS_360` in `src/study360/features.py`, see "The 360 tables" below)
 
 The only missing values are in the keeper columns, for the 100 shots where no keeper shows up in the freeze frame, and `nearest_def_dist` for 8 shots with no defender in it. Gradient boosting (XGBoost, LightGBM) handles that on its own. For logistic regression, fill them in using the training data only.
+
+The `_360` sets have many more: their 360 columns are blank for every shot without its own 360 frame (about 90% of shots), and the keeper ones also for the 5% of 360 shots where the camera didn't see the keeper. The same applies: LightGBM handles it, and for logistic regression fill them in from the training data.
 
 ## Other columns
 
@@ -91,6 +94,8 @@ These are for the 360 study. A 360 frame is a snapshot of every player visible o
 `360_frames.parquet` has one row per frame: `shot_id`, `rel` (0 for the shot itself, then -1, -2 and so on for earlier events in the same possession, up to 5), `event_type`, `dt_s` (seconds before the shot), `flipped` and `visible_area` (the corners of the part of the pitch the camera could see). `360_players.parquet` has one row per player per frame: `shot_id`, `rel`, `x`, `y`, `shooting_team`, `actor` and `keeper`. Join them on `shot_id` and `rel`.
 
 A few things to know. StatsBomb records each frame from the point of view of whoever made that event, so frames from the defending team's events (about 21% of the earlier ones, mostly pressures and duels) have already been mirrored to the shooting team's view. The earlier frames are a median of 0.2, 1.2, 2.1, 3.1 and 4.0 seconds before the shot, and 8,458 shots have all five. About 4% of shots in 360 matches have no frame of their own, but their earlier frames are still there. On average about 15 players are visible per frame, and anyone outside `visible_area` is unknown, not absent. StatsBomb's 360 spec also says `visible_area` can be empty when the camera wasn't on the pitch, and a player can now and then sit outside it because they were placed by hand. Finally, the 360 frame and the freeze frame for the same shot are separate recordings and typically put the keeper about a yard apart, so don't read small differences between them as information.
+
+The `_360` feature sets turn each shot's own 360 frame (`rel` = 0) into the 18 freeze-frame features above, computed the same way (`frame_features`) and named with an `s360ff_` prefix, like `s360ff_n_def_in_triangle`. They're measured from the shot's event location, the shooter is left out as in a freeze frame, and only players the camera saw count. They're computed when you load a `_360` set rather than stored in `shots.parquet` (`src/study360/features.py`), so that load takes about 2 seconds instead of a fraction of one. `meta["has_360"]` marks the shots that have them. On valid, they improve on `base` for the 360 shots but add nothing on top of `base_ff`, which already has the freeze frame.
 
 ## Things to watch out for
 
@@ -117,5 +122,7 @@ save_predictions(meta_valid["shot_id"], model.predict_proba(X_valid)[:, 1], "gbm
 ```
 
 `meta` holds the ids, competition, StatsBomb's xG and so on for slicing, never for the model itself. Every model saves a predictions file like this, and that's the only thing evaluation needs. Run Python from the repo root so the `src.` imports work.
+
+The 360 study works the same way with a `_360` set, like `load_dataset("train", feature_set="base_360")`. To score only the shots with a 360 frame, keep the rows where `meta["has_360"]` is true.
 
 Data: StatsBomb open data, under their Public Data User Agreement (`LICENSE.pdf` in hudl/open-data). In short: it's for research, not commercial use, we can't pass the data on to anyone outside the agreement, and anything we publish has to credit StatsBomb and carry their logo (it's in their Media Pack). They also ask everyone using it to register at statsbomb.com/resource-centre.
