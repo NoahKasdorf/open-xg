@@ -4,76 +4,105 @@ from pathlib import Path
 import joblib
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold, GridSearchCV
-from sklearn.metrics import log_loss, brier_score_loss
 
 from src.dataset import load_dataset, save_predictions
 
-# Load the team's official datasets
-X_train, y_train, meta_train = load_dataset(
-    "train", feature_set="base_ff"
-)
-X_valid, y_valid, meta_valid = load_dataset(
-    "valid", feature_set="base_ff"
-)
+Path("models").mkdir(exist_ok=True)
 
-# Gradient Boosting model
-model = HistGradientBoostingClassifier(
-    random_state=42,
-    early_stopping=False
-)
+feature_sets = ["geometry", "base", "base_ff"]
 
-# Hyperparameter tuning
 parameters = {
     "learning_rate": [0.05, 0.1],
     "max_leaf_nodes": [15, 31],
-    "max_iter": [100, 200]
+    "max_iter": [100, 200],
 }
 
-# Keep shots from the same match together
-cv = GroupKFold(n_splits=3)
+for feature_set in feature_sets:
+    print(f"\nRunning Gradient Boosting: {feature_set}")
 
-search = GridSearchCV(
-    estimator=model,
-    param_grid=parameters,
-    scoring="neg_log_loss",
-    cv=cv,
-    n_jobs=-1,
-    verbose=1
-)
+    X_train, y_train, meta_train = load_dataset(
+        "train", feature_set=feature_set
+    )
+    X_valid, y_valid, meta_valid = load_dataset(
+        "valid", feature_set=feature_set
+    )
+    X_test, _, meta_test = load_dataset(
+        "test", feature_set=feature_set
+    )
 
-print("Training Gradient Boosting...")
+    model = HistGradientBoostingClassifier(
+        random_state=42,
+        early_stopping=False
+    )
 
-search.fit(
-    X_train,
-    y_train,
-    groups=meta_train["match_id"]
-)
+    # Tune hyperparameters using train only
+    search = GridSearchCV(
+        estimator=model,
+        param_grid=parameters,
+        scoring="neg_log_loss",
+        cv=GroupKFold(n_splits=3),
+        n_jobs=-1,
+        verbose=1
+    )
 
-best_model = search.best_estimator_
+    search.fit(
+        X_train,
+        y_train,
+        groups=meta_train["match_id"]
+    )
 
-print("Best hyperparameters:", search.best_params_)
-print("Best CV Log Loss:", round(-search.best_score_, 4))
+    best_model = search.best_estimator_
+    print("Best parameters:", search.best_params_)
 
-# Evaluate on validation data
-predictions = best_model.predict_proba(X_valid)[:, 1]
+    # Fit Platt calibration on valid only
+    valid_raw = best_model.predict_proba(X_valid)[:, 1]
 
-print("Training complete!")
-print("Training shots:", len(X_train))
-print("Validation shots:", len(X_valid))
-print("Validation Log Loss:", round(log_loss(y_valid, predictions), 4))
-print("Validation Brier Score:", round(brier_score_loss(y_valid, predictions), 4))
+    calibrator = LogisticRegression(max_iter=1000)
+    calibrator.fit(
+        valid_raw.reshape(-1, 1),
+        y_valid
+    )
 
-# Save predictions for team evaluation
-predictions = np.clip(predictions, 1e-6, 1 - 1e-6)
-save_predictions(
-    meta_valid["shot_id"],
-    predictions,
-    "gbm_base_ff_valid"
-)
+    valid_calibrated = calibrator.predict_proba(
+        valid_raw.reshape(-1, 1)
+    )[:, 1]
 
-# Save trained model
-Path("models").mkdir(exist_ok=True)
-joblib.dump(best_model, "models/gradient_boosting.joblib")
+    test_raw = best_model.predict_proba(X_test)[:, 1]
+    test_calibrated = calibrator.predict_proba(
+        test_raw.reshape(-1, 1)
+    )[:, 1]
 
-print("Model saved to models/gradient_boosting.joblib")
+    valid_calibrated = np.clip(
+        valid_calibrated, 1e-6, 1 - 1e-6
+    )
+    test_calibrated = np.clip(
+        test_calibrated, 1e-6, 1 - 1e-6
+    )
+
+    # Save predictions for team evaluation
+    save_predictions(
+        meta_valid["shot_id"],
+        valid_calibrated,
+        f"gbm_{feature_set}_platt_valid"
+    )
+    save_predictions(
+        meta_test["shot_id"],
+        test_calibrated,
+        f"gbm_{feature_set}_platt_test"
+    )
+
+    # Save model and calibrator
+    joblib.dump(
+        best_model,
+        f"models/gbm_{feature_set}.joblib"
+    )
+    joblib.dump(
+        calibrator,
+        f"models/gbm_{feature_set}_platt.joblib"
+    )
+
+    print(f"Completed: {feature_set}")
+
+print("\nAll Gradient Boosting runs completed!")
